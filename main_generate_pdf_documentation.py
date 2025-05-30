@@ -1,89 +1,115 @@
 import os
 import subprocess
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfReader
 
-DOSSIER_DOC = "./doc"
-DOSSIER_TMP = "./build/tmp"
-FICHIER_SORTIE = "./build/FestiMagazDB documentation.pdf"
-FICHIER_PAGE_BLANCHE = os.path.join(DOSSIER_TMP, "blank.pdf")
+DOC_FOLDER = "./doc"
+TMP_FOLDER = "./.tmp"
+OUTPUT_FILE = "./FestiMagazDB documentation.pdf"
 
 
-def verifier_pandoc():
-    """Vérifie que Pandoc est installé"""
+def check_pandoc_installed():
+    """Check if Pandoc is available in the system."""
     from shutil import which
     if which("pandoc") is None:
-        raise EnvironmentError("Pandoc n'est pas installé ou pas dans le PATH.")
+        raise EnvironmentError("Pandoc is not installed or not found in PATH.")
 
 
-def lister_fichiers_md(dossier):
-    """Retourne la liste triée des fichiers .md dans le dossier"""
+def list_markdown_files(folder):
+    """Return a sorted list of .md files in the given folder."""
     return sorted([
-        f for f in os.listdir(dossier)
+        f for f in os.listdir(folder)
         if f.endswith(".md")
     ])
 
 
-def convertir_md_en_pdf(fichier_md, dossier_source, dossier_cible):
-    """Convertit un fichier .md en .pdf avec Pandoc, depuis le dossier doc"""
-    source = os.path.join(dossier_source, fichier_md)
-    nom_sans_ext = os.path.splitext(fichier_md)[0]
-    cible = os.path.join(dossier_cible, f"{nom_sans_ext}.pdf")
-
+def generate_pdf(source_md_path, output_pdf_path, resource_path):
+    """Generate a PDF from a Markdown file using Pandoc."""
     cmd = [
         "pandoc",
-        source,
-        "-o", cible,
-        "--resource-path=" + dossier_source
+        source_md_path,
+        "-o", output_pdf_path,
+        f"--resource-path={resource_path}"
     ]
     subprocess.run(cmd, check=True)
-    return cible
 
 
-def generer_page_blanche(fichier_sortie):
-    """Crée un fichier PDF d'une seule page blanche (A4)"""
-    writer = PdfWriter()
-    writer.add_blank_page(width=595.2, height=841.8)  # Format A4
-    with open(fichier_sortie, "wb") as f:
-        writer.write(f)
+def get_pdf_page_count(pdf_file_path):
+    """Return the number of pages in a PDF file."""
+    reader = PdfReader(pdf_file_path)
+    return len(reader.pages)
 
 
-def fusionner_pdfs_avec_blancs(fichiers_pdf, fichier_blanche, fichier_resultat):
-    """Fusionne tous les PDF avec insertion de page blanche après les documents impairs"""
-    final_writer = PdfWriter()
-    page_blanche = PdfReader(fichier_blanche).pages[0]
+def insert_newpages_in_markdown(original_md_path, num_blank_pages):
+    """Append \\newpage commands at the end of the Markdown file."""
+    with open(original_md_path, "a", encoding="utf-8") as f:
+        for _ in range(num_blank_pages):
+            f.write("  \n\\newpage\n  ")
 
-    for fichier in fichiers_pdf:
-        reader = PdfReader(fichier)
-        for page in reader.pages:
-            final_writer.add_page(page)
 
-        if len(reader.pages) % 2 != 0:
-            final_writer.add_page(page_blanche)
+def prepare_markdown_files(folder, temp_folder):
+    """
+    For each .md file:
+    - Generate a temporary PDF
+    - Count its pages
+    - If page count is odd, add 1 \newpage
+    - Return final list of markdown file paths (in order)
+    """
+    md_files = list_markdown_files(folder)
+    final_md_paths = []
 
-    with open(fichier_resultat, "wb") as f:
-        final_writer.write(f)
+    os.makedirs(temp_folder, exist_ok=True)
+
+    print("Checking page counts for each Markdown file...")
+
+    for md_file in md_files:
+        md_path = os.path.join(folder, md_file)
+        pdf_path = os.path.join(temp_folder, f"{os.path.splitext(md_file)[0]}.pdf")
+
+        # Copy original file to reset any previous \newpage edits
+        tmp_md_path = os.path.join(temp_folder, md_file)
+        with open(md_path, "r", encoding="utf-8") as src, open(tmp_md_path, "w", encoding="utf-8") as dst:
+            dst.write(src.read())
+
+        # Generate PDF from the copied version
+        generate_pdf(tmp_md_path, pdf_path, folder)
+
+        # Count pages
+        page_count = get_pdf_page_count(pdf_path)
+        print(f"{md_file} -> {page_count} page(s)")
+
+        # Add page breaks to have even number of pages
+        page_break_to_add = 1 if (page_count % 2 == 0) else 2
+        insert_newpages_in_markdown(tmp_md_path, page_break_to_add)
+
+        final_md_paths.append(tmp_md_path)
+
+    return final_md_paths
+
+
+def merge_all_markdown_to_pdf(markdown_files, output_pdf, resource_path):
+    """Combine all Markdown files into one final PDF with consistent pagination."""
+    cmd = [
+        "pandoc",
+        *markdown_files,
+        "-o", output_pdf,
+        f"--resource-path={resource_path}"
+    ]
+    subprocess.run(cmd, check=True)
 
 
 def main():
-    verifier_pandoc()
+    check_pandoc_installed()
 
-    os.makedirs(DOSSIER_TMP, exist_ok=True)
-    fichiers_md = lister_fichiers_md(DOSSIER_DOC)
-    fichiers_pdf = []
+    os.makedirs(TMP_FOLDER, exist_ok=True)
 
-    print("Conversion Markdown -> PDF...")
-    for fichier_md in fichiers_md:
-        fichier_pdf = convertir_md_en_pdf(fichier_md, DOSSIER_DOC, DOSSIER_TMP)
-        fichiers_pdf.append(fichier_pdf)
-        print(f"{fichier_pdf}")
+    # Step 1: Prepare each Markdown file (PDF generation + page check)
+    markdown_with_padding = prepare_markdown_files(DOC_FOLDER, TMP_FOLDER)
 
-    print("Génération de page blanche...")
-    generer_page_blanche(FICHIER_PAGE_BLANCHE)
+    # Step 2: Combine everything into one final PDF
+    print("Generating final PDF...")
+    merge_all_markdown_to_pdf(markdown_with_padding, OUTPUT_FILE, DOC_FOLDER)
 
-    print("Fusion finale...")
-    fusionner_pdfs_avec_blancs(fichiers_pdf, FICHIER_PAGE_BLANCHE, FICHIER_SORTIE)
-
-    print(f"PDF final généré : {FICHIER_SORTIE}")
+    print(f"Final PDF generated: {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":
