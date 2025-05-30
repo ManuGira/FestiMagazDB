@@ -11,14 +11,16 @@ IF %ERRORLEVEL%==0 (
     echo NocoDB est deja en cours.
 ) ELSE (
     echo Demarrage de NocoDB...
-    start "" "C:\FestiMagazDB\Noco-win-x64.exe"
+    cd /d "C:\FestiMagazDB"
+    start "FestiMagazDB Server" ".\Noco-win-x64.exe"
 )
 
 REM Boucle d'attente jusqu'a ce que localhost:8080 reponde
-set "maxWait=30"
+set "maxWait=120"
 set /a count=0
 
 :wait_loop
+
 timeout /t 1 >nul
 curl -s http://localhost:8080 >nul 2>&1
 if %ERRORLEVEL%==0 (
